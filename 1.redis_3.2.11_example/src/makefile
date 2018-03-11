@@ -1,3 +1,4 @@
+DEPENDENCY_TARGETS=hiredis
 OPTIMIZATION?=-O0
 
 STD=-std=c99 -pedantic -DREDIS_STATIC=''
@@ -103,8 +104,14 @@ all:$(PROGS)
 21.redis-cli:21.redis-cli.o $(REDIS_CLI_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
 
+persist-settings: distclean
+	(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
-%.o: %.c
+.PHONY: persist-settings
+
+.make-prerequisites: persist-settings
+
+%.o: %.c .make-prerequisites
 	$(REDIS_CC) -c $<
 
 include Makefile.dep
