@@ -1,5 +1,5 @@
 AE_DIR=../../src
-EXAMPLES=1.hiredis-reply 2.example-ae 3.example-ae-sub
+	EXAMPLES=1.hiredis-reply 2.example-ae 3.example-ae-sub
 
 OBJ=net.o hiredis.o sds.o async.o
 LIBNAME=libhiredis
@@ -46,3 +46,5 @@ examples: $(EXAMPLES)
 
 clean:
 	rm -rf $(DYLIBNAME) $(STLIBNAME) $(TESTS) examples/hiredis-example* *.o *.gcda *.gcno *.gcov
+	rm -rf 1.hiredis-reply 2.example-ae 3.example-ae-sub 4.example-sub
+
