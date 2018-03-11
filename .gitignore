@@ -1,0 +1,6 @@
+appendonly.aof
+dump.rdb
+*.log
+*.o
+a.out
+
