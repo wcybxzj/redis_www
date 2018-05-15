@@ -5,7 +5,7 @@ STD=-std=c99 -pedantic -DREDIS_STATIC=''
 WARN=-Wall -W
 OPT=$(OPTIMIZATION)
 
-#FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)   $(REDIS_CFLAGS) -I../deps/geohash-int
+#FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)   $(REDIS_CFLAGS) -I../deps/hiredis -I../deps/geohash-int
 FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g
@@ -39,14 +39,14 @@ REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_SERVER_OBJ=  14.test_t_zset.o ybx_util.o
 
 REDIS_SERVER_OBJ+= ae.o anet.o dict.o server.o sds.o adlist.o ziplist.o  release.o zmalloc.o networking.o util.o sha1.o endianconv.o \
-					object.o db.o  rdb.o replication.o t_zset.o t_hash.o  config.o aof.o t_string.o t_list.o t_set.o pubsub.o multi.o debug.o cluster.o \
-					intset.o syncio.o quicklist.o lzf_c.o lzf_d.o scripting.o bio.o rio.o crc64.o notify.o setproctitle.o blocked.o latency.o redis-check-rdb.o
+			object.o db.o  rdb.o replication.o t_zset.o t_hash.o  config.o aof.o t_string.o t_list.o t_set.o pubsub.o multi.o debug.o cluster.o crc16.o \
+			intset.o syncio.o quicklist.o lzf_c.o lzf_d.o scripting.o bio.o rio.o crc64.o sentinel.o notify.o setproctitle.o blocked.o latency.o redis-check-rdb.o
 
 REDIS_CLI_OBJ = anet.o adlist.o zmalloc.o anet.o ae.o crc64.o
 
 PROGS = 1.test_zmalloc 2.test_sds 3.test_adlist 4.test_dict 5.test_ziplist 6.test_skiplist 7.test_intset\
 		8.test_object 9.test_quicklist 10.test_t_list 11.test_t_set 12.test_t_set 13.test_t_hash 14.test_t_zset_main \
-		15.test_db 18.rdb 20.ae 21.redis-cli
+		15.test_db 18.rdb 20.redis-server 21.redis-cli 24.redis-sentinel
 
 all:$(PROGS)
 
@@ -66,43 +66,46 @@ all:$(PROGS)
 	$(CC) $(FINAL_CFLAGS) -o 5.test_ziplist 5.test_ziplist.o sds.o  dict.o  adlist.o ziplist.o zmalloc.o util.o sha1.o endianconv.o
 
 6.test_skiplist: 6.test_skiplist.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 6.test_skiplist 6.test_skiplist.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 6.test_skiplist 6.test_skiplist.o $(REDIS_SERVER_OBJ)   ../deps/hiredis/libhiredis.a
 
 7.test_intset: 7.test_intset.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 7.test_intset 7.test_intset.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 7.test_intset 7.test_intset.o    $(REDIS_SERVER_OBJ)   ../deps/hiredis/libhiredis.a
 
 8.test_object: 8.test_object.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 8.test_object 8.test_object.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 8.test_object 8.test_object.o    $(REDIS_SERVER_OBJ)   ../deps/hiredis/libhiredis.a
 
 9.test_quicklist: 9.test_quicklist.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 9.test_quicklist 9.test_quicklist.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 9.test_quicklist 9.test_quicklist.o  $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 10.test_t_list: 10.test_t_list.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 10.test_t_list 10.test_t_list.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 10.test_t_list 10.test_t_list.o  $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 11.test_t_set: 11.test_t_set.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 11.test_t_set 11.test_t_set.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 11.test_t_set 11.test_t_set.o   $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 12.test_t_set: 12.test_t_set.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 12.test_t_set 12.test_t_set.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 12.test_t_set 12.test_t_set.o   $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 13.test_t_hash: 13.test_t_hash.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 13.test_t_hash 13.test_t_hash.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 13.test_t_hash 13.test_t_hash.o  $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 14.test_t_zset_main: 14.test_t_zset_main.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 14.test_t_zset_main 14.test_t_zset_main.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 14.test_t_zset_main 14.test_t_zset_main.o $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 15.test_db: 15.test_db.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 15.test_db 15.test_db.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 15.test_db 15.test_db.o $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 18.rdb: 18.rdb.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 18.rdb 18.rdb.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 18.rdb 18.rdb.o $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
-20.ae: 20.ae.o $(REDIS_SERVER_OBJ)
-	$(CC) $(FINAL_CFLAGS) -o 20.ae 20.ae.o $(REDIS_SERVER_OBJ)
+20.redis-server: 20.redis-server.o $(REDIS_SERVER_OBJ)
+	$(CC) $(FINAL_CFLAGS) -o 20.redis-server 20.redis-server.o $(REDIS_SERVER_OBJ)  ../deps/hiredis/libhiredis.a
 
 21.redis-cli:21.redis-cli.o $(REDIS_CLI_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
+	$(CC)  $(FINAL_CFLAGS) -o $@ $^ ../deps/hiredis/libhiredis.a $(FINAL_LIBS)
+
+24.redis-sentinel:20.redis-server
+	install 20.redis-server  24.redis-sentinel
 
 persist-settings: distclean
 	(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))

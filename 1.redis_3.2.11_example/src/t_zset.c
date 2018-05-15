@@ -240,6 +240,33 @@ zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range) {
     return x;
 }
 
+
+/* Find the last node that is contained in the specified range.
+ * Returns NULL when no element is contained in the range. */
+zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
+    zskiplistNode *x;
+    int i;
+
+    /* If everything is out of range, return early. */
+    if (!zslIsInRange(zsl,range)) return NULL;
+
+    x = zsl->header;
+    for (i = zsl->level-1; i >= 0; i--) {
+        /* Go forward while *IN* range. */
+        while (x->level[i].forward &&
+            zslValueLteMax(x->level[i].forward->score,range))
+                x = x->level[i].forward;
+    }
+
+    /* This is an inner range, so this node cannot be NULL. */
+    serverAssert(x != NULL);
+
+    /* Check if score >= min. */
+    if (!zslValueGteMin(x->score,range)) return NULL;
+    return x;
+}
+
+
 /* Find the rank for an element by both score and key.
  * Returns 0 when the element cannot be found, rank otherwise.
  * Note that the rank is 1-based due to the span of zsl->header to the

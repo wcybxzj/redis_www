@@ -144,11 +144,11 @@ int selectDb(client *c, int id) {
  *----------------------------------------------------------------------------*/
 
 void signalModifiedKey(redisDb *db, robj *key) {
-    //touchWatchedKey(db,key);
+    touchWatchedKey(db,key);
 }
 
 void signalFlushedDb(int dbid) {
-    //touchWatchedKeysOnFlush(dbid);
+    touchWatchedKeysOnFlush(dbid);
 }
 
 
@@ -213,6 +213,28 @@ void keysCommand(client *c) {
     }
     dictReleaseIterator(di);
     setDeferredMultiBulkLength(c,replylen,numkeys);
+}
+
+void shutdownCommand(client *c) {
+    int flags = 0;
+
+    if (c->argc > 2) {
+        addReply(c,shared.syntaxerr);
+        return;
+    } else if (c->argc == 2) {
+        if (!strcasecmp(c->argv[1]->ptr,"nosave")) {
+            flags |= SHUTDOWN_NOSAVE;
+        } else if (!strcasecmp(c->argv[1]->ptr,"save")) {
+            flags |= SHUTDOWN_SAVE;
+        } else {
+            addReply(c,shared.syntaxerr);
+            return;
+        }
+    }
+    if (server.loading || server.sentinel_mode)
+        flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
+    if (prepareForShutdown(flags) == C_OK) exit(0);
+    addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
 
 // 高级的设置key，无论key是否存在，都将val与其关联
@@ -427,17 +449,55 @@ void ttlCommand(client *c) {
     ttlGenericCommand(c, 0);
 }
 
-/* Slot to Key API. This is used by Redis Cluster in order to obtain in
- * a fast way a key that belongs to a specified hash slot. This is useful
- * while rehashing the cluster. */
+/* -----------------------------------------------------------------------------
+ * API to get key arguments from commands
+ * ---------------------------------------------------------------------------*/
+
+/* The base case is to use the keys position as given in the command table
+ * (firstkey, lastkey, step). */
+int *getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, int *numkeys) {
+    int j, i = 0, last, *keys;
+    UNUSED(argv);
+
+    if (cmd->firstkey == 0) {
+        *numkeys = 0;
+        return NULL;
+    }
+    last = cmd->lastkey;
+    if (last < 0) last = argc+last;
+    keys = zmalloc(sizeof(int)*((last - cmd->firstkey)+1));
+    for (j = cmd->firstkey; j <= last; j += cmd->keystep) {
+        serverAssert(j < argc);
+        keys[i++] = j;
+    }
+    *numkeys = i;
+    return keys;
+}
+
+
+int *getKeysFromCommand(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) {
+    if (cmd->getkeys_proc) {
+        return cmd->getkeys_proc(cmd,argv,argc,numkeys);
+    } else {
+        return getKeysUsingCommandTable(cmd,argv,argc,numkeys);
+    }
+}
+
+
+/* Free the result of getKeysFromCommand. */
+void getKeysFreeResult(int *result) {
+    zfree(result);
+}
+
+
 // 将key添加到槽里
 void slotToKeyAdd(robj *key) {
-	//// 计算所属的槽
-	//unsigned int hashslot = keyHashSlot(key->ptr,sdslen(key->ptr));
+	// 计算所属的槽
+	unsigned int hashslot = keyHashSlot(key->ptr,sdslen(key->ptr));
 
-	//// 将槽slot作为分值，key作为成员，添加到跳跃表中
-	//zslInsert(server.cluster->slots_to_keys,hashslot,key);
-	//incrRefCount(key);
+	// 将槽slot作为分值，key作为成员，添加到跳跃表中
+	zslInsert(server.cluster->slots_to_keys,hashslot,key);
+	incrRefCount(key);
 }
 
 
@@ -455,3 +515,67 @@ void slotToKeyFlush(void) {
     server.cluster->slots_to_keys = zslCreate();
 }
 
+unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int count) {
+    zskiplistNode *n;
+    zrangespec range;
+    int j = 0;
+
+    range.min = range.max = hashslot;
+    range.minex = range.maxex = 0;
+
+    n = zslFirstInRange(server.cluster->slots_to_keys, &range);
+    while(n && n->score == hashslot && count--) {
+        keys[j++] = n->obj;
+        n = n->level[0].forward;
+    }
+    return j;
+}
+
+unsigned int delKeysInSlot(unsigned int hashslot) {
+    zskiplistNode *n;
+    zrangespec range;
+    int j = 0;
+
+    range.min = range.max = hashslot;
+    range.minex = range.maxex = 0;
+
+    n = zslFirstInRange(server.cluster->slots_to_keys, &range);
+    while(n && n->score == hashslot) {
+        robj *key = n->obj;
+        n = n->level[0].forward; /* Go to the next item before freeing it. */
+        incrRefCount(key); /* Protect the object while freeing it. */
+        dbDelete(&server.db[0],key);
+        decrRefCount(key);
+        j++;
+    }
+    return j;
+}
+
+unsigned int countKeysInSlot(unsigned int hashslot) {
+    zskiplist *zsl = server.cluster->slots_to_keys;
+    zskiplistNode *zn;
+    zrangespec range;
+    int rank, count = 0;
+
+    range.min = range.max = hashslot;
+    range.minex = range.maxex = 0;
+
+    /* Find first element in range */
+    zn = zslFirstInRange(zsl, &range);
+
+    /* Use rank of first element, if any, to determine preliminary count */
+    if (zn != NULL) {
+        rank = zslGetRank(zsl, zn->score, zn->obj);
+        count = (zsl->length - (rank - 1));
+
+        /* Find last element in range */
+        zn = zslLastInRange(zsl, &range);
+
+        /* Use rank of last element, if any, to determine the actual count */
+        if (zn != NULL) {
+            rank = zslGetRank(zsl, zn->score, zn->obj);
+            count -= (zsl->length - rank);
+        }
+    }
+    return count;
+}

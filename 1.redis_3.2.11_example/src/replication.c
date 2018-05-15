@@ -417,9 +417,11 @@ void syncCommand(client *c) {
 
     if (!strcasecmp(c->argv[0]->ptr,"psync")) {
         if (masterTryPartialResynchronization(c) == C_OK) {
+			printf("主从使用部分同步\n");
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
+			printf("主从使用全部同步\n");
             char *master_runid = c->argv[1]->ptr;
             if (master_runid[0] != '?') server.stat_sync_partial_err++;
         }
@@ -1312,6 +1314,95 @@ int cancelReplicationHandshake(void) {
 }
 
 
+
+/* Set replication to the specified master address and port. */
+void replicationSetMaster(char *ip, int port) {
+    sdsfree(server.masterhost);
+    server.masterhost = sdsnew(ip);
+    server.masterport = port;
+    if (server.master) freeClient(server.master);
+    disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
+    disconnectSlaves(); /* Force our slaves to resync with us as well. */
+    replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
+    freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+    cancelReplicationHandshake();
+    server.repl_state = REPL_STATE_CONNECT;
+    server.master_repl_offset = 0;
+    server.repl_down_since = 0;
+}
+
+
+
+
+/* Cancel replication, setting the instance as a master itself. */
+void replicationUnsetMaster(void) {
+    if (server.masterhost == NULL) return; /* Nothing to do. */
+    sdsfree(server.masterhost);
+    server.masterhost = NULL;
+    if (server.master) {
+        if (listLength(server.slaves) == 0) {
+            /* If this instance is turned into a master and there are no
+             * slaves, it inherits the replication offset from the master.
+             * Under certain conditions this makes replicas comparable by
+             * replication offset to understand what is the most updated. */
+            server.master_repl_offset = server.master->reploff;
+            freeReplicationBacklog();
+        }
+        freeClient(server.master);
+    }
+    replicationDiscardCachedMaster();
+    cancelReplicationHandshake();
+    server.repl_state = REPL_STATE_NONE;
+}
+
+
+
+
+void slaveofCommand(client *c) {
+    /* SLAVEOF is not allowed in cluster mode as replication is automatically
+     * configured using the current address of the master node. */
+    if (server.cluster_enabled) {
+        addReplyError(c,"SLAVEOF not allowed in cluster mode.");
+        return;
+    }
+
+    /* The special host/port combination "NO" "ONE" turns the instance
+     * into a master. Otherwise the new master address is set. */
+    if (!strcasecmp(c->argv[1]->ptr,"no") &&
+        !strcasecmp(c->argv[2]->ptr,"one")) {
+        if (server.masterhost) {
+            replicationUnsetMaster();
+            sds client = catClientInfoString(sdsempty(),c);
+            serverLog(LL_NOTICE,"MASTER MODE enabled (user request from '%s')",
+                client);
+            sdsfree(client);
+        }
+    } else {
+        long port;
+
+        if ((getLongFromObjectOrReply(c, c->argv[2], &port, NULL) != C_OK))
+            return;
+
+        /* Check if we are already attached to the specified slave */
+        if (server.masterhost && !strcasecmp(server.masterhost,c->argv[1]->ptr)
+            && server.masterport == port) {
+            serverLog(LL_NOTICE,"SLAVE OF would result into synchronization with the master we are already connected with. No operation performed.");
+            addReplySds(c,sdsnew("+OK Already connected to specified master\r\n"));
+            return;
+        }
+        /* There was no previous master or the user specified a different one,
+         * we can continue. */
+        replicationSetMaster(c->argv[1]->ptr, port);
+        sds client = catClientInfoString(sdsempty(),c);
+        serverLog(LL_NOTICE,"SLAVE OF %s:%d enabled (user request from '%s')",
+            server.masterhost, server.masterport, client);
+        sdsfree(client);
+    }
+    addReply(c,shared.ok);
+}
+
+
+
 void replicationSendAck(void) {
     client *c = server.master;
     if (c != NULL) {
@@ -1416,6 +1507,25 @@ void replicationScriptCacheFlush(void) {
 }
 
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------*/
+
+
+long long replicationGetSlaveOffset(void) {
+    long long offset = 0;
+
+    if (server.masterhost != NULL) {
+        if (server.master) {
+            offset = server.master->reploff;
+        } else if (server.cached_master) {
+            offset = server.cached_master->reploff;
+        }
+    }
+    /* offset may be -1 when the master does not support it at all, however
+     * this function is designed to return an offset that can express the
+     * amount of data processed by the master, so we return a positive
+     * integer. */
+    if (offset < 0) offset = 0;
+    return offset;
+}
 
 /* --------------------------- REPLICATION CRON  ---------------------------- */
 

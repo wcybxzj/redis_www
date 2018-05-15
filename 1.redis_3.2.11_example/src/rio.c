@@ -10,7 +10,51 @@
 
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
+/* Returns 1 or 0 for success/failure. */
+static size_t rioBufferWrite(rio *r, const void *buf, size_t len) {
+    r->io.buffer.ptr = sdscatlen(r->io.buffer.ptr,(char*)buf,len);
+    r->io.buffer.pos += len;
+    return 1;
+}
 
+/* Returns 1 or 0 for success/failure. */
+static size_t rioBufferRead(rio *r, void *buf, size_t len) {
+    if (sdslen(r->io.buffer.ptr)-r->io.buffer.pos < len)
+        return 0; /* not enough buffer to return len bytes. */
+    memcpy(buf,r->io.buffer.ptr+r->io.buffer.pos,len);
+    r->io.buffer.pos += len;
+    return 1;
+}
+
+/* Returns read/write position in buffer. */
+static off_t rioBufferTell(rio *r) {
+    return r->io.buffer.pos;
+}
+
+/* Flushes any buffer to target device if applicable. Returns 1 on success
+ * and 0 on failures. */
+static int rioBufferFlush(rio *r) {
+    UNUSED(r);
+    return 1; /* Nothing to do, our write just appends to the buffer. */
+}
+
+static const rio rioBufferIO = {
+    rioBufferRead,
+    rioBufferWrite,
+    rioBufferTell,
+    rioBufferFlush,
+    NULL,           /* update_checksum */
+    0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
+    { { NULL, 0 } } /* union for io-specific vars */
+};
+
+void rioInitWithBuffer(rio *r, sds s) {
+    *r = rioBufferIO;
+    r->io.buffer.ptr = s;
+    r->io.buffer.pos = 0;
+}
 /* --------------------- Stdio file pointer implementation ------------------- */
 
 /* Returns 1 or 0 for success/failure. */
@@ -33,18 +77,6 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFileRead(rio *r, void *buf, size_t len) {
     return fread(buf,len,1,r->io.file.fp);
-}
-
-/* Returns read/write position in buffer. */
-static off_t rioBufferTell(rio *r) {
-    return r->io.buffer.pos;
-}
-
-/* Flushes any buffer to target device if applicable. Returns 1 on success
- * and 0 on failures. */
-static int rioBufferFlush(rio *r) {
-    UNUSED(r);
-    return 1; /* Nothing to do, our write just appends to the buffer. */
 }
 
 /* Returns read/write position in file. */

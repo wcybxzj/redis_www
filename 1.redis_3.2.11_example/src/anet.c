@@ -142,6 +142,44 @@ int anetSendTimeout(char *err, int fd, long long ms) {
     return ANET_OK;
 }
 
+int anetGenericResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len,
+                       int flags)
+{
+    struct addrinfo hints, *info;
+    int rv;
+
+    memset(&hints,0,sizeof(hints));
+    if (flags & ANET_IP_ONLY) hints.ai_flags = AI_NUMERICHOST;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;  /* specify socktype to avoid dups */
+
+    if ((rv = getaddrinfo(host, NULL, &hints, &info)) != 0) {
+        anetSetError(err, "%s", gai_strerror(rv));
+        return ANET_ERR;
+    }
+    if (info->ai_family == AF_INET) {
+        struct sockaddr_in *sa = (struct sockaddr_in *)info->ai_addr;
+        inet_ntop(AF_INET, &(sa->sin_addr), ipbuf, ipbuf_len);
+    } else {
+        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)info->ai_addr;
+        inet_ntop(AF_INET6, &(sa->sin6_addr), ipbuf, ipbuf_len);
+    }
+
+    freeaddrinfo(info);
+    return ANET_OK;
+}
+
+int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len) {
+    return anetGenericResolve(err,host,ipbuf,ipbuf_len,ANET_NONE);
+}
+
+
+int anetResolveIP(char *err, char *host, char *ipbuf, size_t ipbuf_len) {
+    return anetGenericResolve(err,host,ipbuf,ipbuf_len,ANET_IP_ONLY);
+}
+
+
+
 static int anetSetReuseAddr(char *err, int fd) {
 	int yes = 1;
 	/* Make sure connection-intensive things like the redis benckmark
@@ -235,6 +273,20 @@ end:
         return s;
     }
 }//end of static int anetTcpGenericConnect()
+
+int anetTcpNonBlockConnect(char *err, char *addr, int port)
+{
+    return anetTcpGenericConnect(err,addr,port,NULL,ANET_CONNECT_NONBLOCK);
+}
+
+
+int anetTcpNonBlockBindConnect(char *err, char *addr, int port,
+                               char *source_addr)
+{
+    return anetTcpGenericConnect(err,addr,port,source_addr,
+            ANET_CONNECT_NONBLOCK);
+}
+
 
 int anetTcpNonBlockBestEffortBindConnect(char *err, char *addr, int port,
                                          char *source_addr)
@@ -402,3 +454,27 @@ int anetFormatPeer(int fd, char *buf, size_t buf_len) {
     anetPeerToString(fd,ip,sizeof(ip),&port);
     return anetFormatAddr(buf, buf_len, ip, port);
 }
+
+
+int anetSockName(int fd, char *ip, size_t ip_len, int *port) {
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    if (getsockname(fd,(struct sockaddr*)&sa,&salen) == -1) {
+        if (port) *port = 0;
+        ip[0] = '?';
+        ip[1] = '\0';
+        return -1;
+    }
+    if (sa.ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)&sa;
+        if (ip) inet_ntop(AF_INET,(void*)&(s->sin_addr),ip,ip_len);
+        if (port) *port = ntohs(s->sin_port);
+    } else {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
+        if (ip) inet_ntop(AF_INET6,(void*)&(s->sin6_addr),ip,ip_len);
+        if (port) *port = ntohs(s->sin6_port);
+    }
+    return 0;
+}
+

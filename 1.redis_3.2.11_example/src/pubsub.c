@@ -165,7 +165,6 @@ int pubsubUnsubscribeAllChannels(client *c, int notify) {
     return count;
 }
 
-
 /* Unsubscribe from all the patterns. Return the number of patterns the
  * client was subscribed from. */
 int pubsubUnsubscribeAllPatterns(client *c, int notify) {
@@ -189,9 +188,6 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
     }
     return count;
 }
-
-
-
 
 /* Publish a message */
 int pubsubPublishMessage(robj *channel, robj *message) {
@@ -257,8 +253,19 @@ void publishCommand(client *c) {
         //clusterPropagatePublish(c->argv[1],c->argv[2]);
 	} else{
         forceCommandPropagation(c,PROPAGATE_REPL);
-}
+	}
     addReplyLongLong(c,receivers);
 }
 
+void punsubscribeCommand(client *c) {
+    if (c->argc == 1) {
+        pubsubUnsubscribeAllPatterns(c,1);
+    } else {
+        int j;
+
+        for (j = 1; j < c->argc; j++)
+            pubsubUnsubscribePattern(c,c->argv[j],1);
+    }
+    if (clientSubscriptionsCount(c) == 0) c->flags &= ~CLIENT_PUBSUB;
+}
 

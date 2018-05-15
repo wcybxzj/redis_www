@@ -47,3 +47,21 @@ void unblockClient(client *c) {
     }
 }
 
+void disconnectAllBlockedClients(void) {
+    listNode *ln;
+    listIter li;
+
+    listRewind(server.clients,&li);
+    while((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+
+        if (c->flags & CLIENT_BLOCKED) {
+            addReplySds(c,sdsnew(
+                "-UNBLOCKED force unblock from blocking operation, "
+                "instance state changed (master -> slave?)\r\n"));
+            unblockClient(c);
+            c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+        }
+    }
+}
+

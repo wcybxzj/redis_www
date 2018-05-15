@@ -2,5 +2,9 @@ appendonly.aof
 dump.rdb
 *.log
 *.o
+*.a
+*.so
+*.rdb
+*.aof
 a.out
 

@@ -461,9 +461,6 @@ void setDeferredMultiBulkLength(client *c, void *node, long length) {
     asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
-
-
-
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
 // 添加一个longlong作为整型回复或回复的长度，格式：<prefix><long long><crlf>
@@ -555,6 +552,14 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     addReply(c,shared.crlf);
 }
 
+/* Add sds to reply (takes ownership of sds and frees it) */
+void addReplyBulkSds(client *c, sds s)  {
+    addReplySds(c,sdscatfmt(sdsempty(),"$%u\r\n",
+        (unsigned long)sdslen(s)));
+    addReplySds(c,s);
+    addReply(c,shared.crlf);
+}
+
 /* Add a C nul term string as bulk reply */
 void addReplyBulkCString(client *c, const char *s) {
     if (s == NULL) {
@@ -572,9 +577,6 @@ void addReplyBulkLongLong(client *c, long long ll) {
     len = ll2string(buf,64,ll);
     addReplyBulkCBuffer(c,buf,len);
 }
-
-
-
 
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
@@ -1365,6 +1367,17 @@ void processInputBuffer(client *c) {
 
 
 
+/* Completely replace the client command vector with the provided one. */
+void replaceClientCommandVector(client *c, int argc, robj **argv) {
+    freeClientArgv(c);
+    zfree(c->argv);
+    c->argv = argv;
+    c->argc = argc;
+    c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);
+    serverAssertWithInfo(c,NULL,c->cmd != NULL);
+}
+
+
 /* This function returns the number of bytes that Redis is virtually
  * using to store the reply still not read by the client.
  * It is "virtual" since the reply output list may contain objects that
@@ -1477,6 +1490,25 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 }//end of readQueryFromClient()
 
 
+void getClientsMaxBuffers(unsigned long *longest_output_list,
+                          unsigned long *biggest_input_buffer) {
+    client *c;
+    listNode *ln;
+    listIter li;
+    unsigned long lol = 0, bib = 0;
+
+    listRewind(server.clients,&li);
+    while ((ln = listNext(&li)) != NULL) {
+        c = listNodeValue(ln);
+
+        if (listLength(c->reply) > lol) lol = listLength(c->reply);
+        if (sdslen(c->querybuf) > bib) bib = sdslen(c->querybuf);
+    }
+    *longest_output_list = lol;
+    *biggest_input_buffer = bib;
+}
+
+
 // 生成client的Peer ID
 void genClientPeerId(client *client, char *peerid,
                             size_t peerid_len) {
@@ -1557,6 +1589,176 @@ sds catClientInfoString(sds s, client *client) {
 }//end of catClientInfoString()
 
 
+sds getAllClientsInfoString(void) {
+    listNode *ln;
+    listIter li;
+    client *client;
+    sds o = sdsnewlen(NULL,200*listLength(server.clients));
+    sdsclear(o);
+    listRewind(server.clients,&li);
+    while ((ln = listNext(&li)) != NULL) {
+        client = listNodeValue(ln);
+        o = catClientInfoString(o,client);
+        o = sdscatlen(o,"\n",1);
+    }
+    return o;
+}// sds getAllClientsInfoString(void)
+
+void clientCommand(client *c) {
+    listNode *ln;
+    listIter li;
+    client *client;
+
+    if (!strcasecmp(c->argv[1]->ptr,"list") && c->argc == 2) {
+        /* CLIENT LIST */
+        sds o = getAllClientsInfoString();
+        addReplyBulkCBuffer(c,o,sdslen(o));
+        sdsfree(o);
+    } else if (!strcasecmp(c->argv[1]->ptr,"reply") && c->argc == 3) {
+        /* CLIENT REPLY ON|OFF|SKIP */
+        if (!strcasecmp(c->argv[2]->ptr,"on")) {
+            c->flags &= ~(CLIENT_REPLY_SKIP|CLIENT_REPLY_OFF);
+            addReply(c,shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
+            c->flags |= CLIENT_REPLY_OFF;
+        } else if (!strcasecmp(c->argv[2]->ptr,"skip")) {
+            if (!(c->flags & CLIENT_REPLY_OFF))
+                c->flags |= CLIENT_REPLY_SKIP_NEXT;
+        } else {
+            addReply(c,shared.syntaxerr);
+            return;
+        }
+    } else if (!strcasecmp(c->argv[1]->ptr,"kill")) {
+        /* CLIENT KILL <ip:port>
+         * CLIENT KILL <option> [value] ... <option> [value] */
+        char *addr = NULL;
+        int type = -1;
+        uint64_t id = 0;
+        int skipme = 1;
+        int killed = 0, close_this_client = 0;
+
+        if (c->argc == 3) {
+            /* Old style syntax: CLIENT KILL <addr> */
+            addr = c->argv[2]->ptr;
+            skipme = 0; /* With the old form, you can kill yourself. */
+        } else if (c->argc > 3) {
+            int i = 2; /* Next option index. */
+
+            /* New style syntax: parse options. */
+            while(i < c->argc) {
+                int moreargs = c->argc > i+1;
+
+                if (!strcasecmp(c->argv[i]->ptr,"id") && moreargs) {
+                    long long tmp;
+
+                    if (getLongLongFromObjectOrReply(c,c->argv[i+1],&tmp,NULL)
+                        != C_OK) return;
+                    id = tmp;
+                } else if (!strcasecmp(c->argv[i]->ptr,"type") && moreargs) {
+                    type = getClientTypeByName(c->argv[i+1]->ptr);
+                    if (type == -1) {
+                        addReplyErrorFormat(c,"Unknown client type '%s'",
+                            (char*) c->argv[i+1]->ptr);
+                        return;
+                    }
+                } else if (!strcasecmp(c->argv[i]->ptr,"addr") && moreargs) {
+                    addr = c->argv[i+1]->ptr;
+                } else if (!strcasecmp(c->argv[i]->ptr,"skipme") && moreargs) {
+                    if (!strcasecmp(c->argv[i+1]->ptr,"yes")) {
+                        skipme = 1;
+                    } else if (!strcasecmp(c->argv[i+1]->ptr,"no")) {
+                        skipme = 0;
+                    } else {
+                        addReply(c,shared.syntaxerr);
+                        return;
+                    }
+                } else {
+                    addReply(c,shared.syntaxerr);
+                    return;
+                }
+                i += 2;
+            }
+        } else {
+            addReply(c,shared.syntaxerr);
+            return;
+        }
+
+        /* Iterate clients killing all the matching clients. */
+        listRewind(server.clients,&li);
+        while ((ln = listNext(&li)) != NULL) {
+            client = listNodeValue(ln);
+            if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
+            if (type != -1 && getClientType(client) != type) continue;
+            if (id != 0 && client->id != id) continue;
+            if (c == client && skipme) continue;
+
+            /* Kill it. */
+            if (c == client) {
+                close_this_client = 1;
+            } else {
+                freeClient(client);
+            }
+            killed++;
+        }
+
+        /* Reply according to old/new format. */
+        if (c->argc == 3) {
+            if (killed == 0)
+                addReplyError(c,"No such client");
+            else
+                addReply(c,shared.ok);
+        } else {
+            addReplyLongLong(c,killed);
+        }
+
+        /* If this client has to be closed, flag it as CLOSE_AFTER_REPLY
+         * only after we queued the reply to its output buffers. */
+        if (close_this_client) c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    } else if (!strcasecmp(c->argv[1]->ptr,"setname") && c->argc == 3) {
+        int j, len = sdslen(c->argv[2]->ptr);
+        char *p = c->argv[2]->ptr;
+
+        /* Setting the client name to an empty string actually removes
+         * the current name. */
+        if (len == 0) {
+            if (c->name) decrRefCount(c->name);
+            c->name = NULL;
+            addReply(c,shared.ok);
+            return;
+        }
+
+        /* Otherwise check if the charset is ok. We need to do this otherwise
+         * CLIENT LIST format will break. You should always be able to
+         * split by space to get the different fields. */
+        for (j = 0; j < len; j++) {
+            if (p[j] < '!' || p[j] > '~') { /* ASCII is assumed. */
+                addReplyError(c,
+                    "Client names cannot contain spaces, "
+                    "newlines or special characters.");
+                return;
+            }
+        }
+        if (c->name) decrRefCount(c->name);
+        c->name = c->argv[2];
+        incrRefCount(c->name);
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr,"getname") && c->argc == 2) {
+        if (c->name)
+            addReplyBulk(c,c->name);
+        else
+            addReply(c,shared.nullbulk);
+    } else if (!strcasecmp(c->argv[1]->ptr,"pause") && c->argc == 3) {
+        long long duration;
+
+        if (getTimeoutFromObjectOrReply(c,c->argv[2],&duration,UNIT_MILLISECONDS)
+                                        != C_OK) return;
+        pauseClients(duration);
+        addReply(c,shared.ok);
+    } else {
+        addReplyError(c, "Syntax error, try CLIENT (LIST | KILL | GETNAME | SETNAME | PAUSE | REPLY)");
+    }
+}//end of void clientCommand(client *c)
+
 /* Rewrite the command vector of the client. All the new objects ref count
  * is incremented. The old command vector is freed, and the old objects
  * ref count is decremented. */
@@ -1593,6 +1795,16 @@ int getClientTypeByName(char *name) {
     else if (!strcasecmp(name,"pubsub")) return CLIENT_TYPE_PUBSUB;
     else if (!strcasecmp(name,"master")) return CLIENT_TYPE_MASTER;
     else return -1;
+}
+
+char *getClientTypeName(int class) {
+    switch(class) {
+	    case CLIENT_TYPE_NORMAL: return "normal";
+	    case CLIENT_TYPE_SLAVE:  return "slave";
+	    case CLIENT_TYPE_PUBSUB: return "pubsub";
+	    case CLIENT_TYPE_MASTER: return "master";
+	    default:                       return NULL;
+	    }
 }
 
 // 检查client的输出缓冲区是否到达限制，到达限制则进行标记
@@ -1660,6 +1872,12 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c) {
 		serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
 		sdsfree(client);
 	}
+}
+
+void pauseClients(mstime_t end) {
+    if (!server.clients_paused || end > server.clients_pause_end_time)
+        server.clients_pause_end_time = end;
+    server.clients_paused = 1;
 }
 
 /* Return non-zero if clients are currently paused. As a side effect the
