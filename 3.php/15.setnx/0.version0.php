@@ -14,8 +14,6 @@ function release_lock($redis,$key)
 	$redis->delete($key);
 }
 
-
-
 $redis = new Redis();
  $redis->connect('127.0.0.1', 6379) or die('redis not connect');
 $get = acquire_lock($redis, KEY);
