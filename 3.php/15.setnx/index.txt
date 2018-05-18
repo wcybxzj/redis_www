@@ -1,0 +1,35 @@
+//2个功能函数
+1.del_version.php
+2.getset_perfect_version.php
+
+//调用2.getset_perfect_version.php的函数
+2_1.process1.php
+
+//测试:
+//终端1:
+php 2_1.process1.php 10
+成功获取锁work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+未能获释放锁(因为这个锁是被第二终端设置的,所以失败)
+
+
+//终端2:
+php 2_1.process1.php 10
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+work on redis
+成功获释放锁
