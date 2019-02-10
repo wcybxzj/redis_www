@@ -11,7 +11,7 @@ FINAL_LIBS=-lm
 DEBUG=-g
 
 FINAL_LDFLAGS+= -rdynamic
-FINAL_LIBS+= -pthread
+FINAL_LIBS+=-ldl -pthread
 
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
@@ -30,7 +30,7 @@ endif
 STD=-std=c99 -pedantic -DREDIS_STATIC=''
 WARN=-Wall -W
 
-FINAL_CFLAGS= $(STD) $(WARN) -g -g3 -gdwarf-2 -lm -lpthread
+FINAL_CFLAGS= $(STD) $(WARN) -g -g3 -gdwarf-2 -lm -pthread
 FINAL_CFLAGS+= -I../deps/hiredis -I../deps/linenoise -I../deps/lua/src
 
 REDIS_CC=$(CC) $(FINAL_CFLAGS)

@@ -10,4 +10,6 @@ dump.rdb
 *.rdb
 *.aof
 a.out
-
+.cproject
+.project
+.settings
